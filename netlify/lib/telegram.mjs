@@ -30,3 +30,25 @@ export async function sendMessage(botToken, chatId, text, appUrl){
   const j = await r.json().catch(() => ({}));
   return { ok: !!j.ok, error: j.description || (r.ok ? "" : "HTTP " + r.status) };
 }
+
+/* Убирает то, что часто прилипает при копировании: пробелы, переносы, кавычки, «BOT_TOKEN=», «bot» в начале. */
+export function cleanToken(raw){
+  let t = String(raw || "").trim().replace(/^BOT_TOKEN\s*=\s*/i, "").replace(/^["'`«]+|["'`»]+$/g, "").trim();
+  if (/^bot\d+:/i.test(t)) t = t.slice(3);
+  return t.replace(/\s+/g, "");
+}
+
+/* Объясняет, почему подпись не сошлась: спрашивает у Telegram, чей это токен. */
+export async function signatureHint(token, initData){
+  if (!initData) return "Приложение открыто не из Telegram — подписи нет.";
+  if (!/^\d+:[\w-]{30,}$/.test(token)) return "BOT_TOKEN на сервере не похож на токен бота. Скопируйте его заново из @BotFather → /mybots → API Token.";
+  try {
+    const r = await fetch("https://api.telegram.org/bot" + token + "/getMe");
+    const j = await r.json();
+    if (!j.ok) return "Telegram не принимает BOT_TOKEN с сервера (" + (j.description || "HTTP " + r.status) + "). Возможно, токен перевыпускали — скопируйте актуальный из @BotFather.";
+    return "Подпись Telegram не прошла проверку. Токен на сервере — от бота @" + j.result.username +
+      ", а приложение открыто через другого бота. Откройте приложение кнопкой в @" + j.result.username + " или поставьте в BOT_TOKEN токен того бота, через которого открываете.";
+  } catch (e) {
+    return "Подпись Telegram не прошла проверку, а проверить токен у Telegram не удалось.";
+  }
+}

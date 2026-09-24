@@ -1,17 +1,17 @@
 import { getStore } from "@netlify/blobs";
-import { verifyInitData, sendMessage } from "../lib/telegram.mjs";
+import { verifyInitData, sendMessage, cleanToken, signatureHint } from "../lib/telegram.mjs";
 import { buildDigest } from "../lib/digest.mjs";
 
 /* Приложение присылает сюда выжимку после каждого сохранения. */
 export default async (req, context) => {
   if (req.method !== "POST") return Response.json({ ok: false, error: "POST only" }, { status: 405 });
-  const token = Netlify.env.get("BOT_TOKEN");
+  const token = cleanToken(Netlify.env.get("BOT_TOKEN"));
   if (!token) return Response.json({ ok: false, error: "На сервере не задан BOT_TOKEN" }, { status: 500 });
 
   let body;
   try { body = await req.json(); } catch (e) { return Response.json({ ok: false, error: "bad json" }, { status: 400 }); }
   const user = verifyInitData(body.initData, token);
-  if (!user || !user.id) return Response.json({ ok: false, error: "Подпись Telegram не прошла проверку" }, { status: 401 });
+  if (!user || !user.id) return Response.json({ ok: false, error: await signatureHint(token, body.initData) }, { status: 401 });
 
   const s = body.snapshot || {};
   const store = getStore("uni-users");

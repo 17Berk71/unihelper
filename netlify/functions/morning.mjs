@@ -1,10 +1,10 @@
 import { getStore } from "@netlify/blobs";
-import { sendMessage } from "../lib/telegram.mjs";
+import { sendMessage, cleanToken } from "../lib/telegram.mjs";
 import { runMorning } from "../lib/digest.mjs";
 
 /* Запускается Netlify каждый час; отправляет тем, у кого сейчас 7 утра. */
 export default async (req, context) => {
-  const token = Netlify.env.get("BOT_TOKEN");
+  const token = cleanToken(Netlify.env.get("BOT_TOKEN"));
   if (!token){ console.log("BOT_TOKEN не задан"); return; }
   const url = context?.site?.url;
   const res = await runMorning({
