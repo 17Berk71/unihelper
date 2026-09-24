@@ -364,6 +364,10 @@ html.night .notify{border:1px solid var(--line)}
 .nstat.ok{color:#00A392;font-weight:600}
 .ntest{margin-top:10px;font-size:13px;font-weight:600;color:var(--violet);padding:0}
 .ntest:disabled{color:var(--text-3)}
+/* плашки матрицы не выделяются долгим нажатием */
+.matrix, .quad, .qnote, .qtitle, .uchip, .unsorted{
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+body.dragging, body.dragging *{-webkit-user-select:none!important;user-select:none!important;cursor:grabbing}
 /* ---------------- лист ---------------- */
 .shade{position:fixed;inset:0;background:var(--shade);z-index:110;opacity:0;pointer-events:none;transition:opacity .22s ease}
 .shade.on{opacity:1;pointer-events:auto}
@@ -568,11 +572,68 @@ function writeLocal(raw){
   mem[KEY] = raw;
   try { window.localStorage.setItem(KEY, raw); } catch(e){}
 }
+/* Облако Telegram хранит не больше 4096 символов в одном ключе, а расписание
+   после импорта весит в разы больше. Поэтому данные режутся на части.
+   Пишем в запасной комплект ключей, и только когда все части легли —
+   переключаем указатель (_meta). Так в облаке всегда лежит целая копия. */
+const CHUNK = 3800;
+let cloudGen = "a", cloudBusy = false, cloudAgain = false;
 function pushCloud(){
   if (!cloud || !mem[KEY]) return;
+  if (cloudBusy){ cloudAgain = true; return; }
+  cloudBusy = true; cloudAgain = false;
+  const raw = mem[KEY];
+  const parts = [];
+  for (let i = 0; i < raw.length; i += CHUNK) parts.push(raw.slice(i, i + CHUNK));
+  const gen = cloudGen === "a" ? "b" : "a";
+  const finish = ok => {
+    syncPending = !ok; updateSyncNote();
+    cloudBusy = false;
+    if (cloudAgain) pushCloud();
+  };
+  if (parts.length > 400) return finish(false);
+  let left = parts.length, failed = false;
   try {
-    cloud.setItem(KEY, mem[KEY], err => { syncPending = !!err; updateSyncNote(); });
-  } catch(e){ syncPending = true; updateSyncNote(); }
+    parts.forEach((p, i) => cloud.setItem(KEY + "_" + gen + "_" + i, p, err => {
+      if (err) failed = true;
+      if (--left) return;
+      if (failed) return finish(false);
+      const meta = JSON.stringify({ g:gen, n:parts.length, updated:(state && state.updated) || Date.now() });
+      cloud.setItem(KEY + "_meta", meta, err2 => {
+        if (!err2) cloudGen = gen;
+        finish(!err2);
+      });
+    }));
+  } catch(e){ finish(false); }
+}
+/* чтение: сначала указатель, потом все части; для старых версий — один ключ */
+function readCloud(cb){
+  const single = () => cloud.getItem(KEY, (e, v) => {
+    let r = null; try { r = v ? JSON.parse(v) : null; } catch(x){}
+    cb(e ? undefined : r);
+  });
+  try {
+    cloud.getItem(KEY + "_meta", (err, m) => {
+      if (err) return cb(undefined);
+      let meta = null; try { meta = m ? JSON.parse(m) : null; } catch(x){}
+      if (!meta || !meta.n) return single();
+      cloudGen = meta.g;
+      const keys = [];
+      for (let i = 0; i < meta.n; i++) keys.push(KEY + "_" + meta.g + "_" + i);
+      const out = {};
+      let batches = [], pending;
+      for (let i = 0; i < keys.length; i += 20) batches.push(keys.slice(i, i + 20));
+      pending = batches.length;
+      let bad = false;
+      batches.forEach(b => cloud.getItems(b, (e, vals) => {
+        if (e || !vals) bad = true; else Object.assign(out, vals);
+        if (--pending) return;
+        if (bad) return cb(undefined);
+        const raw = keys.map(k => out[k] || "").join("");
+        try { cb(JSON.parse(raw)); } catch(x){ cb(undefined); }
+      }));
+    });
+  } catch(e){ cb(undefined); }
 }
 function updateSyncNote(){
   const el = document.getElementById("syncNote");
@@ -583,9 +644,9 @@ function load(cb){
   const local = readLocal();
   if (local){ booted = true; cb(local); }
   if (!cloud){ if (!local) cb(null); return; }
-  cloud.getItem(KEY, (err, val) => {
-    let remote = null;
-    if (!err && val){ try { remote = JSON.parse(val); } catch(e){} }
+  readCloud(remote => {
+    /* undefined — облако не ответило; null — там пусто */
+    if (remote === undefined) remote = null;
     if (!booted){ booted = true; return cb(remote); }
     const mine = state ? (state.updated || 0) : 0;
     const theirs = remote ? (remote.updated || 0) : 0;
@@ -1433,33 +1494,69 @@ function dragDrop(){
   }
   dragCancel();
 }
-document.addEventListener("pointerdown", e => {
-  const chip = e.target.closest(".uchip");
-  if (chip){
-    const sx0 = e.clientX, sy0 = e.clientY;
-    clearTimeout(dragTimer);
-    dragTimer = setTimeout(() => { dragBegin(chip, chip.dataset.sort, sx0, sy0); }, 420);
-    return;
-  }
-  const el = e.target.closest(".qnote");
-  if (!el || e.target.closest(".qtick, .qacts")) return;
-  const id = el.querySelector("[data-open-note]");
-  if (!id) return;
-  const noteId = id.dataset.openNote, sx = e.clientX, sy = e.clientY;
+/* Что можно тащить: пункт квадранта или плашку «не разложено» */
+function dragSource(target){
+  const chip = target.closest(".uchip");
+  if (chip) return { el:chip, id:chip.dataset.sort };
+  const el = target.closest(".qnote");
+  if (!el || target.closest(".qtick, .qacts")) return null;
+  const t = el.querySelector("[data-open-note]");
+  return t ? { el:el, id:t.dataset.openNote } : null;
+}
+const SLOP = 10;               /* дрожание пальца до 10px не отменяет зажатие */
+let pressX = 0, pressY = 0, justDragged = 0;
+function pressStart(target, x, y){
+  const src = dragSource(target);
+  if (!src) return;
+  pressX = x; pressY = y;
   clearTimeout(dragTimer);
-  dragTimer = setTimeout(() => { dragBegin(el, noteId, sx, sy); }, 420);
-});
-document.addEventListener("pointermove", e => {
-  if (dragNote) return dragMove(e.clientX, e.clientY);
-  if (dragTimer){ clearTimeout(dragTimer); dragTimer = null; }
-}, { passive:true });
-document.addEventListener("pointerup", e => {
-  if (dragNote){ e.preventDefault(); dragDrop(); return; }
+  dragTimer = setTimeout(() => {
+    dragTimer = null;
+    try { window.getSelection().removeAllRanges(); } catch(e){}
+    dragBegin(src.el, src.id, x, y);
+  }, 420);
+}
+function pressMove(x, y){
+  if (dragNote){ dragMove(x, y); return true; }
+  if (dragTimer && Math.hypot(x - pressX, y - pressY) > SLOP){ clearTimeout(dragTimer); dragTimer = null; }
+  return false;
+}
+function pressEnd(){
   clearTimeout(dragTimer); dragTimer = null;
+  if (!dragNote) return false;
+  justDragged = Date.now();
+  dragDrop();
+  return true;
+}
+
+/* Телефон: сенсорные события. Перетаскивание перехватывает касание целиком —
+   браузер не прокручивает лист и не выделяет текст под пальцем. */
+document.addEventListener("touchstart", e => {
+  if (e.touches.length !== 1) return;
+  const t = e.touches[0];
+  pressStart(e.target, t.clientX, t.clientY);
+}, { passive:true });
+document.addEventListener("touchmove", e => {
+  const t = e.touches[0];
+  if (t && pressMove(t.clientX, t.clientY)) e.preventDefault();
+  else if (dragNote) e.preventDefault();
+}, { passive:false });
+document.addEventListener("touchend", e => { if (pressEnd()) e.preventDefault(); }, { passive:false });
+document.addEventListener("touchcancel", () => { clearTimeout(dragTimer); dragTimer = null; dragCancel(); });
+
+/* Компьютер: мышь */
+document.addEventListener("pointerdown", e => { if (e.pointerType === "mouse") pressStart(e.target, e.clientX, e.clientY); });
+document.addEventListener("pointermove", e => { if (e.pointerType === "mouse") pressMove(e.clientX, e.clientY); }, { passive:true });
+document.addEventListener("pointerup", e => { if (e.pointerType === "mouse") pressEnd(); });
+
+/* долгое нажатие не открывает системное меню «Копировать / Выделить всё» */
+document.addEventListener("contextmenu", e => {
+  if (e.target.closest(".qnote, .uchip, .quad") || dragNote) e.preventDefault();
 });
-document.addEventListener("pointercancel", dragCancel);
-/* пока тащим — страница под пальцем не должна прокручиваться */
-document.addEventListener("touchmove", e => { if (dragNote) e.preventDefault(); }, { passive:false });
+/* клик, прилетевший сразу после перетаскивания, не должен открыть заметку */
+document.addEventListener("click", e => {
+  if (Date.now() - justDragged < 400){ e.stopPropagation(); e.preventDefault(); }
+}, true);
 
 /* экран одной заметки */
 function openNoteView(id, back){
