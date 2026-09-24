@@ -240,11 +240,19 @@ html.night .quad{background:#100E1A}
 .qn{position:absolute;top:11px;right:11px;min-width:19px;height:19px;padding:0 5px;border-radius:999px;
   background:var(--qc);color:#fff;font-size:11px;font-weight:600;display:grid;place-items:center}
 .qlist{display:flex;flex-direction:column;gap:5px}
-.qnote{background:var(--sheet);border-radius:11px;padding:2px}
+.matrix .qlist{max-height:188px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
+  scrollbar-width:none;margin:0 -3px;padding:0 3px}
+.matrix .qlist::-webkit-scrollbar{display:none}
+.matrix .qlist.more{-webkit-mask-image:linear-gradient(#000 calc(100% - 26px),transparent);
+  mask-image:linear-gradient(#000 calc(100% - 26px),transparent)}
+.matrix .qlist.top{-webkit-mask-image:linear-gradient(transparent,#000 18px);mask-image:linear-gradient(transparent,#000 18px)}
+.matrix .qlist.top.more{-webkit-mask-image:linear-gradient(transparent,#000 18px,#000 calc(100% - 26px),transparent);
+  mask-image:linear-gradient(transparent,#000 18px,#000 calc(100% - 26px),transparent)}
+.qnote{position:relative;background:var(--sheet);border-radius:11px;padding:2px}
 html.night .qnote{background:#231E33}
 .qnote.done{opacity:.5}
 .qnote.done .qtitle{text-decoration:line-through}
-.qtick{position:absolute;margin:6px 0 0 6px;width:16px;height:16px;border-radius:5px;border:1.6px solid var(--line);
+.qtick{position:absolute;top:8px;left:8px;margin:0;z-index:1;width:16px;height:16px;border-radius:5px;border:1.6px solid var(--line);
   display:grid;place-items:center;color:transparent}
 .qtick.on{background:var(--qc);border-color:var(--qc);color:#fff}
 .qtick svg{width:10px;height:10px}
@@ -1424,8 +1432,16 @@ const sheet = document.getElementById("sheet");
 const sheetBody = document.getElementById("sheetBody");
 let sheetOpen = null;
 function showSheet(html, name){
+  const keep = {};
+  if (sheetOpen === (name || "x"))
+    sheetBody.querySelectorAll("[data-keep]").forEach(el => { keep[el.dataset.keep] = el.scrollTop; });
   sheet.classList.remove("full");
   sheetBody.innerHTML = html;
+  sheetBody.querySelectorAll("[data-keep]").forEach(el => {
+    if (keep[el.dataset.keep]) el.scrollTop = keep[el.dataset.keep];
+    const mark = () => { el.classList.toggle("more", el.scrollHeight - el.scrollTop - el.clientHeight > 4); el.classList.toggle("top", el.scrollTop > 4); };
+    mark(); requestAnimationFrame(mark); el.addEventListener("scroll", mark, { passive:true });
+  });
   sheetOpen = name || "x";
   shade.classList.add("on");
   requestAnimationFrame(() => sheet.classList.add("on"));
@@ -1696,7 +1712,7 @@ function matrixHTML(){
         '<span class="exp">' + ICON.expand + '</span></i>' +
         (open ? '<span class="qn">' + open + '</span>' : "") + '</button>' +
       (items.length
-        ? '<div class="qlist">' + items.map(n =>
+        ? '<div class="qlist" data-keep="q' + q.k + '">' + items.map(n =>
             '<div class="qnote' + (n.done ? " done" : "") + '">' +
               '<button class="qtick' + (n.done ? " on" : "") + '" data-tick="' + n.id + '" aria-label="Отметить">' + ICON.tick + '</button>' +
               '<button class="qtitle" data-open-note="' + n.id + '">' + esc(noteTitle(n)) +
