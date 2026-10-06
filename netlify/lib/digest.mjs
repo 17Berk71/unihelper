@@ -41,14 +41,13 @@ export function buildDigest(snap, now = new Date()){
   const lines = ["<b>Доброе утро!</b> " + DAYS[loc.wd] + ", " + loc.day + " " + MONTHS[loc.month], ""];
 
   if (lessons.length){
-    const f = lessons[0], s = subj(f.subjectId), room = f.room || s.room;
-    lines.push("Первая пара в <b>" + esc(f.time) + "</b> — " + esc(s.name || "пара") +
-      (f.kind ? " (" + esc(String(f.kind).toLowerCase()) + ")" : "") + (room ? ", ауд. " + esc(room) : ""));
-    const last = lessons[lessons.length - 1];
-    const end = last.end || last.time;
-    lines.push(lessons.length === 1
-      ? "Сегодня одна пара" + (last.end ? ", до " + esc(last.end) : "") + "."
-      : "Всего " + lessons.length + " " + plural(lessons.length, "пара", "пары", "пар") + ", до " + esc(end) + ".");
+    lines.push(lessons.length === 1 ? "Сегодня одна пара:" :
+      "Сегодня " + lessons.length + " " + plural(lessons.length, "пара", "пары", "пар") + ":");
+    lessons.forEach((l, i) => {
+      const s = subj(l.subjectId), room = l.room || s.room;
+      lines.push((i + 1) + ". <b>" + esc(l.time) + (l.end ? "–" + esc(l.end) : "") + "</b> — " + esc(s.name || "пара") +
+        (l.kind ? " (" + esc(String(l.kind).toLowerCase()) + ")" : "") + (room ? ", ауд. " + esc(room) : ""));
+    });
   } else {
     lines.push("Сегодня пар нет.");
   }
